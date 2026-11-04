@@ -6,3 +6,6 @@ dist/
 # Секреты: любые .env-файлы, кроме шаблона
 .env*
 !.env.example
+
+# Личные заметки для подготовки
+docs/EXPLAIN_FOR_ME.md
