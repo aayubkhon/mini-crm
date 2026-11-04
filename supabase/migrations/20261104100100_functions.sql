@@ -30,12 +30,14 @@ as $$
   select exists (
     select 1 from public.tasks t
     where t.executor_id = (select auth.uid())
+      and t.deleted_at is null
       and t.author_id = p_profile_id
   ) or exists (
     select 1
     from public.task_history h
     join public.tasks t on t.id = h.task_id
     where t.executor_id = (select auth.uid())
+      and t.deleted_at is null
       and h.actor_id = p_profile_id
   );
 $$;
@@ -71,6 +73,10 @@ begin
   if current_user <> 'postgres' then
     if new.status is distinct from old.status then
       raise exception 'Статус меняется только через change_task_status'
+        using errcode = '42501';
+    end if;
+    if new.deleted_at is distinct from old.deleted_at then
+      raise exception 'Задача удаляется только через delete_task'
         using errcode = '42501';
     end if;
     if new.author_id is distinct from old.author_id
@@ -142,7 +148,7 @@ create trigger tasks_log_created
 -- Триггер таблицы profiles
 ----------------------------------------------------------------------
 
--- Защищает то же правило с другой стороны: исполнителю с назначенными задачами
+-- Защищает то же правило с другой стороны: исполнителю с действующими задачами
 -- нельзя сменить роль, иначе executor_id укажет на профиль без роли executor.
 create function private.guard_profile_role_change()
 returns trigger
@@ -151,7 +157,7 @@ set search_path = ''
 as $$
 begin
   if new.role is distinct from old.role and exists (
-    select 1 from public.tasks where executor_id = old.id
+    select 1 from public.tasks where executor_id = old.id and deleted_at is null
   ) then
     raise exception 'Сначала снимите с пользователя назначенные задачи'
       using errcode = '23514';
@@ -195,7 +201,9 @@ begin
 
   -- FOR UPDATE: два одновременных запроса выполнятся по очереди, и второй
   -- увидит уже новый статус.
-  select * into v_task from public.tasks where id = p_task_id for update;
+  select * into v_task from public.tasks
+  where id = p_task_id and deleted_at is null
+  for update;
 
   -- Для чужой задачи ответ тот же, что и для несуществующей: исполнитель
   -- не должен узнавать, есть ли такая задача.
@@ -243,5 +251,30 @@ begin
   );
 
   return v_task;
+end;
+$$;
+
+----------------------------------------------------------------------
+-- RPC: единственный способ удалить задачу
+----------------------------------------------------------------------
+
+-- Удаление мягкое: заполняется только deleted_at. Статус и история не меняются.
+-- Прямого права на DELETE нет ни у кого из пользователей.
+create function public.delete_task(p_task_id uuid)
+returns void
+language plpgsql security definer
+set search_path = ''
+as $$
+begin
+  if not private.is_manager() then
+    raise exception 'Удалять задачи может только постановщик' using errcode = '42501';
+  end if;
+
+  update public.tasks set deleted_at = now()
+  where id = p_task_id and deleted_at is null;
+
+  if not found then
+    raise exception 'Задача не найдена' using errcode = 'P0002';
+  end if;
 end;
 $$;

@@ -41,13 +41,15 @@ create table public.tasks (
   id          uuid primary key default gen_random_uuid(),
   title       text not null check (title ~ '\S' and char_length(title) <= 200),
   description text not null default '' check (char_length(description) <= 5000),
-  -- restrict: объект с задачами удалить нельзя (см. docs/DECISIONS.md)
+  -- restrict: объект с задачами, включая мягко удалённые, удалить нельзя
   object_id   uuid not null references public.objects (id) on delete restrict,
   executor_id uuid not null references public.profiles (id) on delete restrict,
   status      public.task_status not null default 'new',
   -- Автор всегда берётся из JWT. Клиент не имеет права писать в эту колонку.
   author_id   uuid not null default auth.uid() references public.profiles (id) on delete restrict,
-  created_at  timestamptz not null default now()
+  created_at  timestamptz not null default now(),
+  -- Мягкое удаление: заполняется только функцией delete_task.
+  deleted_at  timestamptz
 );
 
 create index tasks_executor_id_idx on public.tasks (executor_id);
@@ -55,8 +57,8 @@ create index tasks_object_id_idx on public.tasks (object_id);
 
 create table public.task_history (
   id          bigint generated always as identity primary key,
-  -- cascade: история удаляется вместе с задачей
-  task_id     uuid not null references public.tasks (id) on delete cascade,
+  -- restrict: задачи удаляются мягко, поэтому история не исчезает никогда
+  task_id     uuid not null references public.tasks (id) on delete restrict,
   from_status public.task_status,
   to_status   public.task_status not null,
   actor_id    uuid not null references public.profiles (id) on delete restrict,

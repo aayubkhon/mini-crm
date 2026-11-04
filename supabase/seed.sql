@@ -3,12 +3,13 @@
 --   manager@example.com, executor.a@example.com, executor.b@example.com
 --
 -- UUID копировать не нужно: они берутся из auth.users по email.
--- Скрипт можно запускать повторно: демо-задачи и объекты создаются заново.
+-- Скрипт можно запускать повторно. Если демо-данные уже есть, он ничего не меняет
+-- и ничего не удаляет: задачи и история в этой системе не удаляются физически.
 --
 -- Статусы меняются настоящей функцией change_task_status от имени нужного
 -- пользователя, поэтому демо-история прошла те же проверки, что и обычная.
 
-create function pg_temp.seed_move(
+create or replace function pg_temp.seed_move(
   p_task uuid,
   p_actor uuid,
   p_to public.task_status,
@@ -44,18 +45,18 @@ begin
     raise exception 'Сначала создайте в Dashboard пользователей: manager@example.com, executor.a@example.com, executor.b@example.com';
   end if;
 
-  -- Очистка предыдущего запуска. История удалится каскадом.
-  delete from public.tasks
-  where object_id in (o_north, o_merid, o_store)
-     or id in (t_new_a, t_work_a, t_review_a, t_accepted_a, t_rework_b, t_work_b, t_new_b);
-  delete from public.objects where id in (o_north, o_merid, o_store);
-
   insert into public.profiles (id, full_name, role) values
     (v_manager,    'Ирина Постановщик', 'manager'),
     (v_executor_a, 'Алексей Исполнитель', 'executor'),
     (v_executor_b, 'Борис Исполнитель', 'executor')
-  on conflict (id) do update
-    set full_name = excluded.full_name, role = excluded.role;
+  on conflict (id) do nothing;
+
+  -- Первый запуск выполняется целиком в одной транзакции, а задачи физически
+  -- не удаляются. Значит, если есть одна задача, значит, есть и все остальные.
+  if exists (select 1 from public.tasks where id = t_new_a) then
+    raise notice 'Демо-данные уже созданы, изменений нет';
+    return;
+  end if;
 
   insert into public.objects (id, name, address) values
     (o_north, 'ЖК «Северный»',       'г. Москва, ул. Лесная, 12'),
@@ -103,4 +104,4 @@ begin
 end;
 $$;
 
-drop function pg_temp.seed_move(uuid, uuid, public.task_status, text);
+drop function if exists pg_temp.seed_move(uuid, uuid, public.task_status, text);
