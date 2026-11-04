@@ -80,7 +80,7 @@ export async function createTask(values: TaskForm) {
   unwrap(await supabase.from('tasks').insert(values));
 }
 
-export async function updateTask(id: string, values: TaskForm) {
+export async function updateTask(id: string, values: Partial<TaskForm>) {
   unwrap(await supabase.from('tasks').update(values).eq('id', id));
 }
 

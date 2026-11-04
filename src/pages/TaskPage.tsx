@@ -7,7 +7,7 @@ import { ConfirmDeleteModal, QueryState, StatusBadge } from '../components/commo
 import { TaskActions } from '../components/TaskActions';
 import { TaskFormModal } from '../components/TaskFormModal';
 import { deleteTask, getHistory, getTask } from '../lib/api';
-import { canEditTask, formatDateTime, STATUS_LABELS } from '../lib/domain';
+import { formatDateTime, isContentLocked, STATUS_LABELS } from '../lib/domain';
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -48,11 +48,9 @@ export function TaskPage() {
             <Title order={2}>{task!.title}</Title>
             {profile.role === 'manager' && (
               <Group>
-                {canEditTask(task!) && (
-                  <Button variant="default" onClick={() => setDialog('edit')}>
-                    Редактировать
-                  </Button>
-                )}
+                <Button variant="default" onClick={() => setDialog('edit')}>
+                  {isContentLocked(task!) ? 'Сменить исполнителя' : 'Редактировать'}
+                </Button>
                 <Button variant="default" color="red" onClick={() => setDialog('delete')}>
                   Удалить
                 </Button>

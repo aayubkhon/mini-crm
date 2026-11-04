@@ -119,6 +119,44 @@ async function statusOf(id: string): Promise<string | null> {
   return (r.data?.status as string | undefined) ?? null;
 }
 
+// Смена исполнителя с A на B в заданном статусе и возврат обратно.
+async function checkReassign(taskId: string, status: Status, label: string) {
+  const countHistory = async () =>
+    (await manager.client.from('task_history').select('id').eq('task_id', taskId)).data?.length;
+  const historyBefore = await countHistory();
+
+  const toManager = await manager.client.from('tasks').update({ executor_id: manager.id }).eq('id', taskId);
+  record(`${label}: назначить постановщика исполнителем нельзя`, toManager.error?.code === '23514', errCode(toManager));
+
+  const selfMove = await execA.client.from('tasks').update({ executor_id: execB.id }).eq('id', taskId).select('id');
+  const stillA = await manager.client.from('tasks').select('executor_id').eq('id', taskId).single();
+  record(
+    `${label}: исполнитель сам не передаёт задачу`,
+    (selfMove.data?.length ?? 0) === 0 && stillA.data?.executor_id === execA.id,
+    `исполнитель: ${stillA.data?.executor_id}`,
+  );
+
+  const toB = await manager.client.from('tasks').update({ executor_id: execB.id }).eq('id', taskId).select('id');
+  const seenByA = await execA.client.from('tasks').select('id').eq('id', taskId);
+  const seenByB = await execB.client.from('tasks').select('id').eq('id', taskId);
+  const aHistory = await execA.client.from('task_history').select('id').eq('task_id', taskId);
+  const bHistory = await execB.client.from('task_history').select('id').eq('task_id', taskId);
+  record(`${label}: постановщик меняет исполнителя`, !toB.error && toB.data?.length === 1, errCode(toB));
+  record(`${label}: статус при смене не изменился`, (await statusOf(taskId)) === status, String(await statusOf(taskId)));
+  record(`${label}: смена не добавляет запись в историю`, (await countHistory()) === historyBefore, `${historyBefore} -> ${await countHistory()}`);
+  record(
+    `${label}: прежний исполнитель теряет доступ, новый получает вместе с историей`,
+    seenByA.data?.length === 0 &&
+      aHistory.data?.length === 0 &&
+      seenByB.data?.length === 1 &&
+      bHistory.data?.length === historyBefore,
+    `A: ${seenByA.data?.length}/${aHistory.data?.length}, B: ${seenByB.data?.length}/${bHistory.data?.length}`,
+  );
+
+  const back = await manager.client.from('tasks').update({ executor_id: execA.id }).eq('id', taskId);
+  if (back.error) throw back.error;
+}
+
 async function run() {
   const objectId = await ensureServiceObject();
   const taskA = await createTask(objectId, execA.id, 'задача исполнителя A');
@@ -251,16 +289,21 @@ async function run() {
   }
 
   group = 'Разрешённые переходы и история';
-  const lockedExecutor = await manager.client.from('tasks').update({ executor_id: execB.id }).eq('id', taskA).select('id');
-  record('На проверке сменить исполнителя нельзя', rejected(lockedExecutor), errCode(lockedExecutor));
+  await checkReassign(taskA, 'in_review', 'На проверке');
   await mustMove(manager.client, taskA, 'rework', 'Нужно исправить');
   await sweep('rework', taskA);
   await mustMove(execA.client, taskA, 'in_progress');
   await mustMove(execA.client, taskA, 'in_review');
   await mustMove(manager.client, taskA, 'accepted');
   await sweep('accepted', taskA);
-  const lockedAccepted = await manager.client.from('tasks').update({ title: 'правка' }).eq('id', taskA).select('id');
-  record('Принятую задачу редактировать нельзя', rejected(lockedAccepted), errCode(lockedAccepted));
+  for (const [label, change] of [
+    ['название', { title: 'правка' }],
+    ['описание', { description: 'правка' }],
+  ] as const) {
+    const r = await manager.client.from('tasks').update(change).eq('id', taskA).select('id');
+    record(`Принятая задача: ${label} менять нельзя`, r.error?.code === '42501', errCode(r));
+  }
+  await checkReassign(taskA, 'accepted', 'Принята');
 
   const chain = await execA.client
     .from('task_history')
@@ -326,8 +369,21 @@ async function run() {
 
   const hidden = await execA.client.rpc('is_manager');
   record('Служебная функция is_manager недоступна как RPC', rejected(hidden), errCode(hidden));
+  // Постановщик мог переназначить задачу с A на B, тогда B законно видит имя A в истории.
+  const bTasks = await manager.client.from('tasks').select('id, author_id').eq('executor_id', execB.id);
+  const bTaskIds = (bTasks.data ?? []).map((t) => t.id as string);
+  const sharedHistory = await manager.client
+    .from('task_history')
+    .select('id')
+    .in('task_id', bTaskIds)
+    .eq('actor_id', execA.id);
+  const expectedVisible = (sharedHistory.data?.length ?? 0) > 0 ? 1 : 0;
   const bProfiles = await execB.client.from('profiles').select('id').eq('id', execA.id);
-  record('Исполнитель не видит профиль постороннего исполнителя', bProfiles.data?.length === 0, `строк: ${bProfiles.data?.length}`);
+  record(
+    'Исполнитель видит профиль другого исполнителя, только если у них есть общая задача',
+    bProfiles.data?.length === expectedVisible,
+    `строк: ${bProfiles.data?.length}, ожидалось: ${expectedVisible}`,
+  );
 
   group = 'Одновременные запросы';
   const taskC = await createTask(objectId, execA.id, 'задача для гонки');

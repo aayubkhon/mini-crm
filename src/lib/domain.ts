@@ -92,11 +92,9 @@ export function availableTransitions(task: Task, profile: Profile): Transition[]
   return TRANSITIONS.filter((t) => t.from === task.status && t.role === profile.role);
 }
 
-// Те же правила, что в триггере guard_task_update: так интерфейс не предлагает
-// заведомо отклоняемое действие.
-export const canEditTask = (task: Task) => task.status !== 'accepted';
-export const canChangeExecutor = (task: Task) =>
-  task.status !== 'accepted' && task.status !== 'in_review';
+// То же правило, что в триггере guard_task_update: в принятой задаче можно сменить
+// только исполнителя. Так интерфейс не предлагает заведомо отклоняемое действие.
+export const isContentLocked = (task: Task) => task.status === 'accepted';
 
 // Формы
 
