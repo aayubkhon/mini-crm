@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.local
+.DS_Store
+
+# Секреты: любые .env-файлы, кроме шаблона
+.env*
+!.env.example
